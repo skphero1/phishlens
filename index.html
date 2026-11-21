@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhishLens — Paste a link, see the trap before you click</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b1020;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px 16px}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:32px;text-align:center}
+h1 span{color:#22d3ee}
+p.sub{text-align:center;color:#9ca3af;margin:8px 0 24px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:20px}
+input{width:100%;padding:14px;border-radius:10px;border:1px solid #374151;background:#0b1020;color:#fff;font-size:16px;outline:none}
+input:focus{border-color:#22d3ee}
+button{cursor:pointer;border:0;border-radius:10px;font-weight:700}
+.btn-main{width:100%;padding:14px;margin-top:12px;background:#22d3ee;color:#082f49;font-size:17px}
+.examples{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.examples button{padding:8px 14px;background:#1f2937;color:#e5e7eb}
+#result{display:none;margin-top:20px}
+.score{text-align:center;font-size:56px;font-weight:800}
+.verdict{text-align:center;font-size:22px;font-weight:800;margin:4px 0 16px}
+.safe{color:#22c55e}.caution{color:#facc15}.danger{color:#ef4444}
+.check{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #1f2937}
+.check b{white-space:nowrap}
+.check span{color:#9ca3af;text-align:right}
+#copy{width:100%;padding:12px;margin-top:16px;background:#22c55e;color:#052e16}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Phish<span>Lens</span></h1>
+<p class="sub">Paste a link, see the trap before you click.</p>
+<div class="card">
+<input id="url" type="text" placeholder="Paste a URL here, e.g. https://google.com">
+<button class="btn-main" onclick="analyse()">Analyse</button>
+<div class="examples">
+<button onclick="demo('https://google.com')">Safe example</button>
+<button onclick="demo('https://paypa1-secure-login.com')">Suspicious example</button>
+<button onclick="demo('http://185.220.101.5/login')">Dangerous example</button>
+</div>
+<div id="result">
+<div class="score" id="score">100</div>
+<div class="verdict" id="verdict">Safe</div>
+<div id="checks"></div>
+<button id="copy" onclick="copyReport()">Copy Report</button>
+</div>
+</div>
+</div>
+<script>
+let lastReport="";
+function demo(u){document.getElementById('url').value=u;analyse();}
+function add(list,name,state,msg,pts){list.push({name,state,msg});return pts;}
+function analyse(){
+let raw=document.getElementById('url').value.trim();
+if(!raw){alert("Paste a URL first");return;}
+if(!/^https?:\/\//i.test(raw)) raw="https://"+raw;
+let score=100,checks=[];
+let u; try{u=new URL(raw);}catch(e){alert("That URL looks invalid, check it and try again");return;}
+let host=u.hostname.toLowerCase();
+// 1. http vs https
+if(u.protocol==="http:"){score=add(checks,"Connection","Danger","Uses http, not https — data can be read or changed in transit.",score-25);}else{score=add(checks,"Connection","Safe","Uses https — connection is encrypted.",score);}
+// 2. raw IP
+if(/^\d+\.\d+\.\d+\.\d+$/.test(host)){score=add(checks,"Raw IP host","Danger","Host is a raw IP address, not a real domain — a classic phishing sign.",score-35);}else{score=add(checks,"Raw IP host","Safe","Host is a named domain, not a raw IP.",score);}
+// 3. punycode
+if(host.includes("xn--")){score=add(checks,"Punycode lookalike","Danger","Contains xn-- — a lookalike domain made to imitate a real brand.",score-30);}else{score=add(checks,"Punycode lookalike","Safe","No punycode trick found.",score);}
+// 4. brand trick
+const brands=["paypal","google","apple","amazon","facebook","meta","microsoft","netflix","binance","coinbase","whatsapp"];
+let brandHit=brands.find(b=>host.includes(b)&&!host.endsWith(b+".com")&&host!==b+".com");
+if(brandHit){score=add(checks,"Brand trick","Danger","Mentions "+brandHit+" but is not the real "+brandHit+" domain.",score-30);}else{score=add(checks,"Brand trick","Safe","No brand-name trick found.",score);}
+// 5. shortener
+const short=["bit.ly","tinyurl.com","t.co","goo.gl","ow.ly","is.gd","cutt.ly"];
+if(short.includes(host)){score=add(checks,"URL shortener","Warning","Shortened link — the real destination is hidden.",score-20);}else{score=add(checks,"URL shortener","Safe","Not a known shortener.",score);}
+// 6. @ trick
+if(raw.includes("@")){score=add(checks,"@ trick","Danger","Contains @ — everything before it is ignored, the real site is after it.",score-25);}else{score=add(checks,"@ trick","Safe","No @ trick.",score);}
+// 7. subdomains / hyphens / length
+let subs=host.split(".").length-2;
+if(subs>3){score=add(checks,"Subdomains","Warning","Too many subdomains ("+subs+") — often used to hide the real domain.",score-15);}else{score=add(checks,"Subdomains","Safe","Subdomain count looks normal.",score);}
+let hyph=(host.match(/-/g)||[]).length;
+if(hyph>3){score=add(checks,"Hyphens","Warning","Too many hyphens ("+hyph+") in the domain.",score-10);}else{score=add(checks,"Hyphens","Safe","Hyphen count looks normal.",score);}
+if(raw.length>75){score=add(checks,"URL length","Warning","Very long URL ("+raw.length+" chars) — often used to hide the real destination.",score-10);}else{score=add(checks,"URL length","Safe","URL length looks normal.",score);}
+score=Math.max(0,Math.min(100,score));
+let verdict,cls;
+if(score>=80){verdict="Safe";cls="safe";}else if(score>=50){verdict="Caution";cls="caution";}else{verdict="Dangerous";cls="danger";}
+document.getElementById('result').style.display="block";
+let s=document.getElementById('score');s.textContent=score+"/100";s.className="score "+cls;
+let v=document.getElementById('verdict');v.textContent=verdict;v.className="verdict "+cls;
+document.getElementById('checks').innerHTML=checks.map(c=>`<div class="check"><b>${c.state}</b><span>${c.name} — ${c.msg}</span></div>`).join("");
+lastReport=`PhishLens report\nURL: ${raw}\nScore: ${score}/100 — ${verdict}\n`+checks.map(c=>`- ${c.name}: ${c.state} — ${c.msg}`).join("\n");
+}
+function copyReport(){navigator.clipboard.writeText(lastReport).then(()=>alert("Report copied"));}
+</script>
+</body>
+</html>
